@@ -1,0 +1,180 @@
+// design.sv - 16-bit RISC with dynamic frequency scaling and simple pipeline registers
+module risc_16_modify (temp_st, clk, clk1);
+    input  [2:0] temp_st;
+    input        clk;
+    output reg   clk1;
+
+    // 16-bit datapath
+    reg [15:0] if_id_ir;
+    reg [15:0] pc;
+
+    reg [15:0] id_ex_ir;
+    reg [15:0] id_ex_a;
+    reg [15:0] id_ex_b;
+    reg [15:0] id_ex_imm;
+
+    reg [15:0] ex_mem_aluout;
+    reg [15:0] ex_mem_ir;
+
+    reg [1:0] id_ex_type, ex_mem_type, mem_rb_type;
+    reg [15:0] mem_rb_ir, mem_rb_aluout;
+
+    // register file: 16 registers (r0..r15)
+    reg [15:0] regb [0:15];
+
+    // instruction memory and data memory
+    reg [15:0] mem      [0:31];
+    reg [15:0] datamem  [0:31];
+
+    reg [3:0] id_ex_opcd, ex_mem_opcd;
+    reg halted;
+    integer del, temp1;
+
+    // Opcode map
+    parameter ADD   = 4'b0000;
+    parameter SUB   = 4'b0001;
+    parameter MUL   = 4'b0010;
+    parameter DIV   = 4'b0011;
+    parameter LSFT  = 4'b0100;
+    parameter ANDR  = 4'b0101;
+    parameter ORR   = 4'b0110;
+    parameter NOP   = 4'b0111;
+    parameter ADDI  = 4'b1000;
+    parameter SUBI  = 4'b1001;
+    parameter MULI  = 4'b1010;
+    parameter DIVI  = 4'b1011;
+    parameter ANDI  = 4'b1100;
+    parameter ORI   = 4'b1101;
+    parameter LW    = 4'b1110;
+    parameter HALT  = 4'b1111;
+
+    // instruction types
+    parameter RR_TYPE = 2'b00;
+    parameter RM_TYPE = 2'b01;
+    parameter LS_TYPE = 2'b10;
+
+    // temperature levels
+    parameter temp_eq    = 3'b000;
+    parameter temp_small = 3'b001;
+    parameter temp_lg    = 3'b010;
+    parameter temp_ext   = 3'b011;
+
+    // initialization
+    initial begin
+        clk1   <= 0;
+        temp1  <= 1;
+        del    <= 1;
+        halted <= 0;
+    end
+
+    // derived clock (clk1)
+    always @(posedge clk) begin
+        if (halted == 1) begin
+            clk1 <= 0;
+        end else if (temp1 < del) begin
+            temp1 <= temp1 + 1;
+        end else begin
+            temp1 <= 1;
+            clk1  <= ~clk1;
+        end
+    end
+
+    // dynamic frequency scaling
+    always @(temp_st) begin
+        case (temp_st)
+            temp_eq:    del <= 2;
+            temp_small: del <= 2;
+            temp_lg:    del <= 4;
+            temp_ext:   del <= 8;
+            default:    del <= 2;
+        endcase
+    end
+
+    // ---------- FETCH ----------
+    always @(posedge clk1) begin
+        if (!halted) begin
+            if_id_ir <= mem[pc];
+            pc       <= pc + 1;
+        end
+    end
+
+    // ---------- DECODE ----------
+    always @(posedge clk1) begin
+        if (!halted) begin
+            if (if_id_ir[15:12] == HALT)
+                halted <= 1;
+
+            case (if_id_ir[15:12])
+                ADD, SUB, MUL, DIV, LSFT, ANDR, ORR, NOP: id_ex_type <= RR_TYPE;
+                ADDI, SUBI, MULI, DIVI, ANDI, ORI:         id_ex_type <= RM_TYPE;
+                LW:                                        id_ex_type <= LS_TYPE;
+                default: id_ex_type <= RR_TYPE;
+            endcase
+        end
+
+        id_ex_ir   <= if_id_ir;
+        id_ex_a    <= regb[ if_id_ir[7:4] ];
+        id_ex_b    <= regb[ if_id_ir[3:0] ];
+        id_ex_imm  <= {{12{if_id_ir[3]}}, if_id_ir[3:0]};
+        id_ex_opcd <= if_id_ir[15:12];
+    end
+
+    // ---------- EXECUTE ----------
+    always @(posedge clk1) begin
+        if (!halted) begin
+            case (id_ex_type)
+                RR_TYPE: begin
+                    case (id_ex_opcd)
+                        ADD:  ex_mem_aluout <= id_ex_a + id_ex_b;
+                        SUB:  ex_mem_aluout <= id_ex_a - id_ex_b;
+                        MUL:  ex_mem_aluout <= id_ex_a * id_ex_b;
+                        DIV:  ex_mem_aluout <= id_ex_b != 0 ? id_ex_a / id_ex_b : 16'h0000;
+                        ANDR: ex_mem_aluout <= id_ex_a & id_ex_b;
+                        ORR:  ex_mem_aluout <= id_ex_a | id_ex_b;
+                        LSFT: ex_mem_aluout <= id_ex_a << id_ex_b[3:0];
+                        default: ex_mem_aluout <= 16'h0000;
+                    endcase
+                end
+                RM_TYPE: begin
+                    case (id_ex_opcd)
+                        ADDI: ex_mem_aluout <= id_ex_a + id_ex_imm;
+                        SUBI: ex_mem_aluout <= id_ex_a - id_ex_imm;
+                        MULI: ex_mem_aluout <= id_ex_a * id_ex_imm;
+                        DIVI: ex_mem_aluout <= id_ex_imm != 0 ? id_ex_a / id_ex_imm : 16'h0000;
+                        ANDI: ex_mem_aluout <= id_ex_a & id_ex_imm;
+                        ORI:  ex_mem_aluout <= id_ex_a | id_ex_imm;
+                        default: ex_mem_aluout <= 16'h0000;
+                    endcase
+                end
+                LS_TYPE: begin
+                    case (id_ex_opcd)
+                        LW: ex_mem_aluout <= id_ex_a + id_ex_imm;
+                        default: ex_mem_aluout <= 16'h0000;
+                    endcase
+                end
+                default: ex_mem_aluout <= 16'h0000;
+            endcase
+        end
+
+        ex_mem_ir   <= id_ex_ir;
+        ex_mem_type <= id_ex_type;
+        ex_mem_opcd <= id_ex_opcd;
+    end
+
+    // ---------- MEM / WRITEBACK ----------
+    always @(posedge clk1) begin
+        if (!halted) begin
+            mem_rb_ir   <= ex_mem_ir;
+            mem_rb_type <= ex_mem_type;
+            regb[ ex_mem_ir[11:8] ] <= ex_mem_aluout;
+        end
+    end
+
+    // ---------- LOAD WRITEBACK ----------
+    always @(posedge clk1) begin
+        if (!halted && mem_rb_ir[15:12] == LW) begin
+            mem_rb_aluout <= datamem[ ex_mem_aluout[4:0] ];
+            regb[ mem_rb_ir[11:8] ] <= datamem[ ex_mem_aluout[4:0] ];
+        end
+    end
+endmodule

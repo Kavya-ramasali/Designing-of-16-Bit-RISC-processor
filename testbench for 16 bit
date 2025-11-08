@@ -1,0 +1,75 @@
+// testbench.sv - testbench for risc_16_modify
+module risc_test_16();
+    reg [2:0] temp_st;
+    reg       clk;
+    integer   k;
+    parameter temp_eq    = 3'b000, 
+              temp_small = 3'b001, 
+              temp_lg    = 3'b010, 
+              temp_ext   = 3'b011;
+    wire clk1;
+
+    // ✅ FIX: removed the stray 'a' at the end of instantiation
+    risc_16_modify cpu (temp_st, clk, clk1);
+
+    initial begin
+        $dumpfile("risc16.vcd");
+        $dumpvars(0, risc_test_16);
+        clk = 0;
+    end
+
+    always #2 clk = ~clk;
+
+    initial begin
+        // initialize registers r0..r15
+        for (k = 0; k < 16; k = k + 1)
+            cpu.regb[k] <= k;
+
+        // program memory (mem[ ]) instructions
+        cpu.mem[0]  <= {4'b1000, 4'd1, 4'd0, 4'hA}; // ADDI r1, r0, #10
+        cpu.mem[1]  <= {4'b0000, 4'd2, 4'd1, 4'd1}; // ADD r2, r1, r1
+        cpu.mem[2]  <= 16'h7F7F;
+        cpu.mem[3]  <= 16'h7F7F;
+        cpu.mem[4]  <= {4'b0000, 4'd4, 4'd1, 4'd2}; // ADD r4, r1, r2
+        cpu.mem[5]  <= {4'b1000, 4'd3, 4'd0, 4'hA}; // ADDI r3,#10
+        cpu.mem[6]  <= {4'b1000, 4'd3, 4'd3, 4'hA}; // ADDI r3,#10 => r3=20
+        cpu.mem[7]  <= 16'h7F7F;
+        cpu.mem[8]  <= {4'b0001, 4'd5, 4'd3, 4'd1}; // SUB r5, r3, r1
+        cpu.mem[9]  <= 16'h7F7F;
+        cpu.mem[10] <= 16'h7F7F;
+        cpu.mem[11] <= {4'b0000, 4'd7, 4'd3, 4'd5}; // ADD r7, r3, r5
+        cpu.datamem[0] <= 16'h0000;
+        cpu.mem[12] <= {4'b1110, 4'd6, 4'd0, 4'h0}; // LW r6, [r0+0]
+        cpu.mem[13] <= {4'b1000, 4'd8, 4'd0, 4'hF};
+        cpu.mem[14] <= {4'b1000, 4'd8, 4'd8, 4'hE};
+        cpu.mem[15] <= {4'b1010, 4'd9, 4'd2, 4'd2}; // MULI r9, r2, #2
+        cpu.mem[16] <= {4'b0011, 4'd10, 4'd3, 4'd1}; // DIV r10, r3, r1
+        cpu.mem[17] <= {4'b1100, 4'd11, 4'd5, 4'd8}; // ANDI r11, r5, #8
+        cpu.mem[18] <= 16'h7F7F;
+        cpu.mem[19] <= 16'h7F7F;
+        cpu.mem[20] <= 16'h7F7F;
+        cpu.mem[21] <= {4'b1111, 12'h000};          // HALT
+
+        cpu.halted <= 0;
+        cpu.pc <= 0;
+
+        // Monitor outputs
+        $monitor($time, 
+            " r0=%0d r1=%0d r2=%0d r3=%0d r4=%0d r5=%0d r6=%0d r7=%0d r8=%0d r9=%0d r10=%0d r11=%0d datamem[0]=%0d",
+            cpu.regb[0], cpu.regb[1], cpu.regb[2], cpu.regb[3], cpu.regb[4], cpu.regb[5],
+            cpu.regb[6], cpu.regb[7], cpu.regb[8], cpu.regb[9], cpu.regb[10], cpu.regb[11], cpu.datamem[0]);
+
+        // Simulate a store to datamem[0] (imitate SW)
+        #50 cpu.datamem[0] <= cpu.regb[3];
+        #300 $finish;
+    end
+
+    // temperature levels for DFS (Dynamic Frequency Scaling)
+    initial begin
+        temp_st <= temp_eq;
+        #20 temp_st <= temp_small;
+        #40 temp_st <= temp_lg;
+        #60 temp_st <= temp_ext;
+        #80 temp_st <= temp_eq;
+    end
+endmodule
